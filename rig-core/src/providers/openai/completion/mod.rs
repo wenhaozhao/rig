@@ -115,6 +115,8 @@ pub enum Message {
         name: Option<String>,
     },
     Assistant {
+        #[serde(default, deserialize_with = "json_utils::string_or_vec", alias = "reasoning_content")]
+        reasoning: Vec<String>,
         #[serde(default, deserialize_with = "json_utils::string_or_vec")]
         content: Vec<AssistantContent>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,25 +354,22 @@ impl TryFrom<message::Message> for Vec<Message> {
                 }
             }
             message::Message::Assistant { content, .. } => {
-                let (text_content, tool_calls) = content.into_iter().fold(
-                    (Vec::new(), Vec::new()),
-                    |(mut texts, mut tools), content| {
+                let (text_content, tool_calls, reasoning) = content.into_iter().fold(
+                    (Vec::new(), Vec::new(), Vec::new()),
+                    |(mut texts, mut tools, mut reasoning), content| {
                         match content {
                             message::AssistantContent::Text(text) => texts.push(text),
                             message::AssistantContent::ToolCall(tool_call) => tools.push(tool_call),
-                            message::AssistantContent::Reasoning(_) => {
-                                unimplemented!(
-                                    "The OpenAI Completions API doesn't support reasoning!"
-                                );
-                            }
+                            message::AssistantContent::Reasoning(mut reasoning_) => reasoning.append(&mut reasoning_.reasoning),
                         }
-                        (texts, tools)
+                        (texts, tools, reasoning)
                     },
                 );
 
                 // `OneOrMany` ensures at least one `AssistantContent::Text` or `ToolCall` exists,
                 //  so either `content` or `tool_calls` will have some content.
                 Ok(vec![Message::Assistant {
+                    reasoning,
                     content: text_content
                         .into_iter()
                         .map(|content| content.text.into())
@@ -568,6 +567,7 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
 
         let content = match &choice.message {
             Message::Assistant {
+                reasoning,
                 content,
                 tool_calls,
                 ..
@@ -599,6 +599,11 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
                         })
                         .collect::<Vec<_>>(),
                 );
+                content.push( completion::AssistantContent::Reasoning(crate::completion::message::Reasoning{
+                    id: None,
+                    reasoning:reasoning.clone(),
+                    part:None,
+                }));
                 Ok(content)
             }
             _ => Err(CompletionError::ResponseError(

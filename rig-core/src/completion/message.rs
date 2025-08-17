@@ -60,6 +60,7 @@ pub enum AssistantContent {
 pub struct Reasoning {
     pub id: Option<String>,
     pub reasoning: Vec<String>,
+    pub part: Option<String>,
 }
 
 impl Reasoning {
@@ -68,6 +69,7 @@ impl Reasoning {
         Self {
             id: None,
             reasoning: vec![input.to_string()],
+            part: None
         }
     }
 
@@ -75,6 +77,7 @@ impl Reasoning {
         Self {
             id: None,
             reasoning: input,
+            part: None,
         }
     }
 

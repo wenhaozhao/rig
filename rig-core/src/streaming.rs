@@ -62,7 +62,7 @@ pub struct StreamingCompletionResponse<R: Clone + Unpin> {
     pub(crate) inner: Abortable<StreamingResult<R>>,
     pub(crate) abort_handle: AbortHandle,
     text: String,
-    reasoning: String,
+    reasoning: (String, String),
     tool_calls: Vec<ToolCall>,
     /// The final aggregated message from the stream
     /// contains all text and tool calls generated
@@ -80,7 +80,7 @@ impl<R: Clone + Unpin> StreamingCompletionResponse<R> {
         Self {
             inner: abortable_stream,
             abort_handle,
-            reasoning: String::new(),
+            reasoning: (String::new(), String::new()),
             text: "".to_string(),
             tool_calls: vec![],
             choice: OneOrMany::one(AssistantContent::text("")),
@@ -148,10 +148,11 @@ impl<R: Clone + Unpin> Stream for StreamingCompletionResponse<R> {
                 RawStreamingChoice::Reasoning { id, reasoning } => {
                     // Forward the streaming tokens to the outer stream
                     // and concat the text together
-                    stream.reasoning = format!("{}{}", stream.reasoning, reasoning.clone());
+                    stream.reasoning = (format!("{}{}", stream.reasoning.0, reasoning.clone()), reasoning.clone());
                     Poll::Ready(Some(Ok(StreamedAssistantContent::Reasoning(Reasoning {
                         id,
-                        reasoning: vec![stream.reasoning.clone()],
+                        reasoning: vec![stream.reasoning.0.clone()],
+                        part: Some(stream.reasoning.1.clone()),
                     }))))
                 }
                 RawStreamingChoice::ToolCall {

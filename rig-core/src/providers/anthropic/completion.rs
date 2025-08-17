@@ -336,7 +336,7 @@ impl From<message::AssistantContent> for Content {
                     input: function.arguments,
                 }
             }
-            message::AssistantContent::Reasoning(Reasoning { reasoning, id }) => {
+            message::AssistantContent::Reasoning(Reasoning { reasoning, id,.. }) => {
                 Content::Thinking {
                     thinking: reasoning.first().cloned().unwrap_or(String::new()),
                     signature: id,

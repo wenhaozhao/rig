@@ -32,6 +32,8 @@ pub struct StreamingToolCall {
 
 #[derive(Deserialize, Debug)]
 struct StreamingDelta {
+    #[serde(default, alias = "reasoning_content")]
+    reasoning: Option<String>,
     #[serde(default)]
     content: Option<String>,
     #[serde(default, deserialize_with = "json_utils::null_or_vec")]
@@ -193,6 +195,10 @@ pub async fn send_compatible_streaming_request(
                                 yield Ok(streaming::RawStreamingChoice::ToolCall {id, name, arguments, call_id: None })
                             }
                         }
+                    }
+
+                    if let Some(reasoning) = &choice.delta.reasoning {
+                        yield Ok(streaming::RawStreamingChoice::Reasoning{id: None, reasoning: reasoning.clone()})
                     }
 
                     if let Some(content) = &choice.delta.content {

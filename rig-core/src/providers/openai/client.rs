@@ -492,6 +492,7 @@ mod tests {
         };
 
         let assistant_message = Message::Assistant {
+            reasoning: vec![],
             content: vec![AssistantContent::Text {
                 text: "Hi there!".to_string(),
             }],
