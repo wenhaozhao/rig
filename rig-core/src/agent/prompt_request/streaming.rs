@@ -252,11 +252,11 @@ where
                                 did_call_tool = true;
                                 // break;
                             },
-                            Ok(StreamedAssistantContent::Reasoning(rig::message::Reasoning { reasoning, id })) => {
+                            Ok(StreamedAssistantContent::Reasoning(rig::message::Reasoning { reasoning, id, part })) => {
                                 chat_history.write().await.push(rig::message::Message::Assistant {
                                     id: None,
                                     content: OneOrMany::one(AssistantContent::Reasoning(Reasoning {
-                                        reasoning: reasoning.clone(), id
+                                        reasoning: reasoning.clone(), id, part,
                                     }))
                                 });
                                 let text = reasoning.into_iter().collect::<Vec<String>>().join("");
