@@ -1,6 +1,6 @@
 //! The streaming module for the OpenAI Responses API.
 //! Please see the `openai_streaming` or `openai_streaming_with_tools` example for more practical usage.
-use crate::completion::CompletionError;
+use crate::completion::{CompletionError, GetTokenUsage};
 use crate::providers::openai::responses_api::{
     ReasoningSummary, ResponsesCompletionModel, ResponsesUsage,
 };
@@ -34,6 +34,16 @@ pub enum StreamingCompletionChunk {
 pub struct StreamingCompletionResponse {
     /// Token usage
     pub usage: ResponsesUsage,
+}
+
+impl GetTokenUsage for StreamingCompletionResponse {
+    fn token_usage(&self) -> Option<crate::completion::Usage> {
+        let mut usage = crate::completion::Usage::new();
+        usage.input_tokens = self.usage.input_tokens;
+        usage.output_tokens = self.usage.output_tokens;
+        usage.total_tokens = self.usage.total_tokens;
+        Some(usage)
+    }
 }
 
 /// A response chunk from OpenAI's response API.
@@ -277,7 +287,7 @@ pub async fn send_compatible_streaming_request(
                                     tool_calls.push(streaming::RawStreamingChoice::ToolCall { id: func.id.clone(), call_id: Some(func.call_id.clone()), name: func.name.clone(), arguments: func.arguments.clone() });
                                 }
 
-                                StreamingItemDoneOutput {  item: Output::Reasoning {  summary, .. }, .. } => {
+                                StreamingItemDoneOutput {  item: Output::Reasoning {  summary, id }, .. } => {
                                     let reasoning = summary
                                         .iter()
                                         .map(|x| {
@@ -286,7 +296,7 @@ pub async fn send_compatible_streaming_request(
                                         })
                                         .collect::<Vec<String>>()
                                         .join("\n");
-                                    yield Ok(streaming::RawStreamingChoice::Reasoning { reasoning, id: None })
+                                    yield Ok(streaming::RawStreamingChoice::Reasoning { reasoning, id: Some(id.to_string()) })
                                 }
                                 _ => continue
                             }

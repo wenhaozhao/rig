@@ -1,8 +1,11 @@
+use rig::agent::stream_to_stdout;
 use rig::prelude::*;
-use rig::providers::gemini::completion::gemini_api_types::{GenerationConfig, ThinkingConfig};
+use rig::providers::gemini::completion::gemini_api_types::{
+    AdditionalParameters, GenerationConfig, ThinkingConfig,
+};
 use rig::{
     providers::gemini::{self},
-    streaming::{StreamingPrompt, stream_to_stdout},
+    streaming::StreamingPrompt,
 };
 
 #[tokio::main]
@@ -15,29 +18,24 @@ async fn main() -> Result<(), anyhow::Error> {
         }),
         ..Default::default()
     };
+    let cfg = AdditionalParameters::default().with_config(gen_cfg);
     // Create streaming agent with a single context prompt
     let agent = gemini::Client::from_env()
         .agent("gemini-2.5-flash")
         .preamble("Be precise and concise.")
         .temperature(0.5)
-        .additional_params(serde_json::to_value(gen_cfg).unwrap())
+        .additional_params(serde_json::to_value(cfg).unwrap())
         .build();
 
     // Stream the response and print chunks as they arrive
     let mut stream = agent
         .stream_prompt("When and where and what type is the next solar eclipse?")
-        .await?;
+        .await;
 
-    stream_to_stdout(&agent, &mut stream).await?;
+    let res = stream_to_stdout(&mut stream).await?;
 
-    if let Some(response) = stream.response {
-        println!(
-            "Usage: {:?} tokens",
-            response.usage_metadata.total_token_count
-        );
-    };
-
-    println!("Message: {:?}", stream.choice);
+    println!("Token usage response: {usage:?}", usage = res.usage());
+    println!("Final text response: {message:?}", message = res.response());
 
     Ok(())
 }

@@ -1,14 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     completion::{CompletionModel, Document},
     tool::{Tool, ToolSet},
     vector_store::VectorStoreIndexDyn,
 };
-
-#[allow(deprecated)]
-#[cfg(feature = "mcp")]
-use crate::tool::mcp::McpTool;
 
 #[cfg(feature = "rmcp")]
 use crate::tool::rmcp::McpTool as RmcpTool;
@@ -118,21 +114,8 @@ impl<M: CompletionModel> AgentBuilder<M> {
         self
     }
 
-    // Add an MCP tool to the agent
-    #[cfg(feature = "mcp")]
-    pub fn mcp_tool<T: mcp_core::transport::Transport>(
-        mut self,
-        tool: mcp_core::types::Tool,
-        client: mcp_core::client::Client<T>,
-    ) -> Self {
-        let toolname = tool.name.clone();
-        #[allow(deprecated)]
-        self.tools.add_tool(McpTool::from_mcp_server(tool, client));
-        self.static_tools.push(toolname);
-        self
-    }
-
     // Add an MCP tool (from `rmcp`) to the agent
+    #[cfg_attr(docsrs, doc(cfg(feature = "rmcp")))]
     #[cfg(feature = "rmcp")]
     pub fn rmcp_tool(mut self, tool: rmcp::model::Tool, client: rmcp::service::ServerSink) -> Self {
         let toolname = tool.name.clone();
@@ -188,16 +171,16 @@ impl<M: CompletionModel> AgentBuilder<M> {
     pub fn build(self) -> Agent<M> {
         Agent {
             name: self.name,
-            model: self.model,
+            model: Arc::new(self.model),
             preamble: self.preamble.unwrap_or_default(),
             static_context: self.static_context,
             static_tools: self.static_tools,
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             additional_params: self.additional_params,
-            dynamic_context: self.dynamic_context,
-            dynamic_tools: self.dynamic_tools,
-            tools: self.tools,
+            dynamic_context: Arc::new(self.dynamic_context),
+            dynamic_tools: Arc::new(self.dynamic_tools),
+            tools: Arc::new(self.tools),
         }
     }
 }

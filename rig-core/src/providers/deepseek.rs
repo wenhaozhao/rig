@@ -12,7 +12,10 @@
 use futures::StreamExt;
 use std::collections::HashMap;
 
-use crate::client::{ClientBuilderError, CompletionClient, ProviderClient};
+use crate::client::{
+    ClientBuilderError, CompletionClient, ProviderClient, VerifyClient, VerifyError,
+};
+use crate::completion::GetTokenUsage;
 use crate::json_utils::merge;
 use crate::message::Document;
 use crate::{
@@ -117,6 +120,11 @@ impl Client {
         let url = format!("{}/{}", self.base_url, path).replace("//", "/");
         self.http_client.post(url).bearer_auth(&self.api_key)
     }
+
+    pub(crate) fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        let url = format!("{}/{}", self.base_url, path).replace("//", "/");
+        self.http_client.get(url).bearer_auth(&self.api_key)
+    }
 }
 
 impl ProviderClient for Client {
@@ -142,6 +150,25 @@ impl CompletionClient for Client {
         CompletionModel {
             client: self.clone(),
             model: model_name.to_string(),
+        }
+    }
+}
+
+impl VerifyClient for Client {
+    #[cfg_attr(feature = "worker", worker::send)]
+    async fn verify(&self) -> Result<(), VerifyError> {
+        let response = self.get("/user/balance").send().await?;
+        match response.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => Err(VerifyError::InvalidAuthentication),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+                Err(VerifyError::ProviderError(response.text().await?))
+            }
+            _ => {
+                response.error_for_status()?;
+                Ok(())
+            }
         }
     }
 }
@@ -622,6 +649,17 @@ struct StreamingCompletionChunk {
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct StreamingCompletionResponse {
     pub usage: Usage,
+}
+
+impl GetTokenUsage for StreamingCompletionResponse {
+    fn token_usage(&self) -> Option<crate::completion::Usage> {
+        let mut usage = crate::completion::Usage::new();
+        usage.input_tokens = self.usage.prompt_tokens as u64;
+        usage.output_tokens = self.usage.completion_tokens as u64;
+        usage.total_tokens = self.usage.total_tokens as u64;
+
+        Some(usage)
+    }
 }
 
 pub async fn send_compatible_streaming_request(

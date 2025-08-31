@@ -1,7 +1,10 @@
 use anyhow::Result;
-use rig::agent::stream_to_stdout;
 use rig::prelude::*;
-use rig::{completion::ToolDefinition, providers, streaming::StreamingPrompt, tool::Tool};
+use rig::{
+    completion::{Prompt, ToolDefinition},
+    providers,
+    tool::Tool,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -17,7 +20,6 @@ struct MathError;
 
 #[derive(Deserialize, Serialize)]
 struct Adder;
-
 impl Tool for Adder {
     const NAME: &'static str = "add";
     type Error = MathError;
@@ -40,12 +42,13 @@ impl Tool for Adder {
                         "description": "The second number to add"
                     }
                 },
-                "required": ["x", "y"]
+                "required": ["x", "y"],
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        println!("[tool-call] Adding {} and {}", args.x, args.y);
         let result = args.x + args.y;
         Ok(result)
     }
@@ -76,13 +79,14 @@ impl Tool for Subtract {
                         "description": "The number to subtract"
                     }
                 },
-                "required": ["x", "y"]
-            }
+                "required": ["x", "y"],
+            },
         }))
         .expect("Tool Definition")
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        println!("[tool-call] Subtracting {} from {}", args.y, args.x);
         let result = args.x - args.y;
         Ok(result)
     }
@@ -90,26 +94,38 @@ impl Tool for Subtract {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
+
+    // Create OpenAI client
+    let openai_client = providers::openai::Client::from_env();
 
     // Create agent with a single context prompt and two tools
-    let calculator_agent = providers::together::Client::from_env()
-        .agent("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo")
-        .preamble(
-            "You are a calculator here to help the user perform arithmetic
-            operations. Use the tools provided to answer the user's question.
-            make your answer long, so we can test the streaming functionality,
-            like 20 words",
-        )
+    let calculator_agent = openai_client
+        .agent(providers::openai::GPT_4O)
+        .preamble("You are a calculator here to help the user perform arithmetic operations. Use the tools provided to answer the user's question.")
         .max_tokens(1024)
         .tool(Adder)
         .tool(Subtract)
         .build();
 
-    println!("Calculate 2 - 5");
-    let mut stream = calculator_agent.stream_prompt("Calculate 2 - 5").await;
+    // Create agent which has the calculator_agent as a tool
+    let agent_using_agent = openai_client
+        .agent(providers::openai::GPT_4O)
+        .preamble("You are a helpful assistant that can solve problems. Use the tool provided to answer the user's question.")
+        .max_tokens(1024)
+        .tool(calculator_agent)
+        .build();
 
-    let _ = stream_to_stdout(&mut stream).await?;
+    // Prompt the agent and print the response
+    println!("Calculate 2 - 5");
+
+    println!(
+        "OpenAI Agent-Using Agent: {}",
+        agent_using_agent.prompt("Calculate 2 - 5").await?
+    );
 
     Ok(())
 }

@@ -10,8 +10,10 @@
 
 use crate::OneOrMany;
 use crate::agent::Agent;
+use crate::agent::prompt_request::streaming::StreamingPromptRequest;
 use crate::completion::{
-    CompletionError, CompletionModel, CompletionRequestBuilder, CompletionResponse, Message, Usage,
+    CompletionError, CompletionModel, CompletionRequestBuilder, CompletionResponse, GetTokenUsage,
+    Message, Usage,
 };
 use crate::message::{AssistantContent, Reasoning, Text, ToolCall, ToolFunction};
 use futures::stream::{AbortHandle, Abortable};
@@ -22,6 +24,41 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
+use tokio::sync::watch;
+
+/// Control for pausing and resuming a streaming response
+pub struct PauseControl {
+    pub(crate) paused_tx: watch::Sender<bool>,
+    pub(crate) paused_rx: watch::Receiver<bool>,
+}
+
+impl PauseControl {
+    pub fn new() -> Self {
+        let (paused_tx, paused_rx) = watch::channel(false);
+        Self {
+            paused_tx,
+            paused_rx,
+        }
+    }
+
+    pub fn pause(&self) {
+        self.paused_tx.send(true).unwrap();
+    }
+
+    pub fn resume(&self) {
+        self.paused_tx.send(false).unwrap();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        *self.paused_rx.borrow()
+    }
+}
+
+impl Default for PauseControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Enum representing a streaming chunk from the model
 #[derive(Debug, Clone)]
@@ -58,9 +95,10 @@ pub type StreamingResult<R> =
 /// The response from a streaming completion request;
 /// message and response are populated at the end of the
 /// `inner` stream.
-pub struct StreamingCompletionResponse<R: Clone + Unpin> {
+pub struct StreamingCompletionResponse<R: Clone + Unpin + GetTokenUsage> {
     pub(crate) inner: Abortable<StreamingResult<R>>,
     pub(crate) abort_handle: AbortHandle,
+    pub(crate) pause_control: PauseControl,
     text: String,
     reasoning: (String, String),
     tool_calls: Vec<ToolCall>,
@@ -73,13 +111,18 @@ pub struct StreamingCompletionResponse<R: Clone + Unpin> {
     pub final_response_yielded: AtomicBool,
 }
 
-impl<R: Clone + Unpin> StreamingCompletionResponse<R> {
+impl<R> StreamingCompletionResponse<R>
+where
+    R: Clone + Unpin + GetTokenUsage,
+{
     pub fn stream(inner: StreamingResult<R>) -> StreamingCompletionResponse<R> {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         let abortable_stream = Abortable::new(inner, abort_registration);
+        let pause_control = PauseControl::new();
         Self {
             inner: abortable_stream,
             abort_handle,
+            pause_control,
             reasoning: (String::new(), String::new()),
             text: "".to_string(),
             tool_calls: vec![],
@@ -92,9 +135,24 @@ impl<R: Clone + Unpin> StreamingCompletionResponse<R> {
     pub fn cancel(&self) {
         self.abort_handle.abort();
     }
+
+    pub fn pause(&self) {
+        self.pause_control.pause();
+    }
+
+    pub fn resume(&self) {
+        self.pause_control.resume();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.pause_control.is_paused()
+    }
 }
 
-impl<R: Clone + Unpin> From<StreamingCompletionResponse<R>> for CompletionResponse<Option<R>> {
+impl<R> From<StreamingCompletionResponse<R>> for CompletionResponse<Option<R>>
+where
+    R: Clone + Unpin + GetTokenUsage,
+{
     fn from(value: StreamingCompletionResponse<R>) -> CompletionResponse<Option<R>> {
         CompletionResponse {
             choice: value.choice,
@@ -104,11 +162,19 @@ impl<R: Clone + Unpin> From<StreamingCompletionResponse<R>> for CompletionRespon
     }
 }
 
-impl<R: Clone + Unpin> Stream for StreamingCompletionResponse<R> {
+impl<R> Stream for StreamingCompletionResponse<R>
+where
+    R: Clone + Unpin + GetTokenUsage,
+{
     type Item = Result<StreamedAssistantContent<R>, CompletionError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let stream = self.get_mut();
+
+        if stream.is_paused() {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
 
         match Pin::new(&mut stream.inner).poll_next(cx) {
             Poll::Pending => Poll::Pending,
@@ -203,22 +269,29 @@ impl<R: Clone + Unpin> Stream for StreamingCompletionResponse<R> {
 }
 
 /// Trait for high-level streaming prompt interface
-pub trait StreamingPrompt<R: Clone + Unpin>: Send + Sync {
+pub trait StreamingPrompt<M, R>
+where
+    M: CompletionModel + 'static,
+    <M as CompletionModel>::StreamingResponse: Send,
+    R: Clone + Unpin + GetTokenUsage,
+{
     /// Stream a simple prompt to the model
-    fn stream_prompt(
-        &self,
-        prompt: impl Into<Message> + Send,
-    ) -> impl Future<Output = Result<StreamingCompletionResponse<R>, CompletionError>>;
+    fn stream_prompt(&self, prompt: impl Into<Message> + Send) -> StreamingPromptRequest<M, ()>;
 }
 
 /// Trait for high-level streaming chat interface
-pub trait StreamingChat<R: Clone + Unpin>: Send + Sync {
+pub trait StreamingChat<M, R>: Send + Sync
+where
+    M: CompletionModel + 'static,
+    <M as CompletionModel>::StreamingResponse: Send,
+    R: Clone + Unpin + GetTokenUsage,
+{
     /// Stream a chat with history to the model
     fn stream_chat(
         &self,
         prompt: impl Into<Message> + Send,
         chat_history: Vec<Message>,
-    ) -> impl Future<Output = Result<StreamingCompletionResponse<R>, CompletionError>>;
+    ) -> StreamingPromptRequest<M, ()>;
 }
 
 /// Trait for low-level streaming completion interface
@@ -346,6 +419,14 @@ mod tests {
         token_count: u32,
     }
 
+    impl GetTokenUsage for MockResponse {
+        fn token_usage(&self) -> Option<crate::completion::Usage> {
+            let mut usage = Usage::new();
+            usage.total_tokens = 15;
+            Some(usage)
+        }
+    }
+
     fn create_mock_stream() -> StreamingCompletionResponse<MockResponse> {
         let stream = stream! {
             yield Ok(RawStreamingChoice::Message("hello 1".to_string()));
@@ -409,6 +490,19 @@ mod tests {
             next_chunk.is_none(),
             "Expected no further chunks after cancellation, got {next_chunk:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_stream_pause_resume() {
+        let stream = create_mock_stream();
+
+        // Test pause
+        stream.pause();
+        assert!(stream.is_paused());
+
+        // Test resume
+        stream.resume();
+        assert!(!stream.is_paused());
     }
 }
 
