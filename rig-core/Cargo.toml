@@ -36,7 +36,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 worker = { workspace = true, optional = true }
-rmcp = { git = " https://github.com/modelcontextprotocol/rust-sdk.git", branch = "main", optional = true, features = ["client"] }
+rmcp = { version = "0.6", optional = true, features = ["client"] }
 reqwest-eventsource = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 
@@ -51,7 +51,7 @@ base64 = { workspace = true }
 
 # Required for `rmcp` example
 hyper-util = { version = "0.1.14", features = ["service", "server"] }
-rmcp = { git = " https://github.com/modelcontextprotocol/rust-sdk.git", branch = "main", features = [
+rmcp = { version = "0.6", features = [
     "client",
     "reqwest", # required for some strange reason
     "transport-streamable-http-client",

@@ -279,9 +279,7 @@ pub mod rmcp {
 
                 if let Some(true) = result.is_error {
                     let error_msg = result
-                        .content
-                        .as_deref()
-                        .and_then(|errors| errors.first())
+                        .content.first()
                         .and_then(|error| error.as_text())
                         .map(|raw| raw.text.as_str())
                         .unwrap_or("No error message returned");
@@ -291,7 +289,6 @@ pub mod rmcp {
                 Ok(result
                     .content
                     .into_iter()
-                    .flatten()
                     .map(|c| match c.raw {
                         rmcp::model::RawContent::Text(raw) => raw.text,
                         rmcp::model::RawContent::Image(raw) => {
@@ -323,6 +320,9 @@ pub mod rmcp {
                         },
                         RawContent::Audio(_) => {
                             unimplemented!("Support for audio results from an MCP tool is currently unimplemented. Come back later!")
+                        }
+                        RawContent::ResourceLink(_) => {
+                            unimplemented!("Support for resource_link results from an MCP tool is currently unimplemented. Come back later!")
                         }
                     })
                     .collect::<String>())
